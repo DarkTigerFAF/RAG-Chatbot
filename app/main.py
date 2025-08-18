@@ -3,7 +3,6 @@ from .database import Base, engine
 from .users import router as users_router
 from .routes.chat_routes import router as chat_router
 
-# Create tables
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI()

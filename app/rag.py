@@ -57,15 +57,12 @@ async def rag_chat(db: Session, user_id: int, question: str) -> str:
     doc_embeddings = await asyncio.gather(
         *[embed_service.generate_embeddings(t) for t in doc_texts]
     )
-    # 1. Embed query
     q_embed = await embed_service.generate_embeddings(question)
 
-    # 2. Retrieve docs
     sims = cosine_similarity([q_embed], doc_embeddings)[0]
     top_idx = sims.argsort()[-2:][::-1]
     context = "\n\n".join(doc_texts[i] for i in top_idx)
 
-    # 3. Get last 7 messages
     history = (
         db.query(History)
         .filter(History.user_id == user_id)
@@ -75,7 +72,6 @@ async def rag_chat(db: Session, user_id: int, question: str) -> str:
     )
     hist_str = "\n".join([f"{m.role}: {m.content}" for m in history])
 
-    # 4. Prompt template
     prompt = """
     Context:
     {{$context}}
@@ -87,7 +83,6 @@ async def rag_chat(db: Session, user_id: int, question: str) -> str:
     Answer:
     """
 
-    # 5. Run through SK
     result = await kernel.invoke_prompt(
         prompt=prompt,
         context=context,
@@ -97,7 +92,6 @@ async def rag_chat(db: Session, user_id: int, question: str) -> str:
     )
     answer = str(result)
 
-    # 6. Save to DB
     db.add(History(user_id=user_id, role="user", content=question))
     db.add(History(user_id=user_id, role="assistant", content=answer))
     db.commit()
