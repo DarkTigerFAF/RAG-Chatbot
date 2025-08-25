@@ -7,157 +7,171 @@ It provides:
 - 💬 **Chat endpoint** (protected, requires token)  
 - 🕑 **Conversation history** stored per user  
 - 🧠 **RAG pipeline** using Groq LLM + HuggingFace embeddings  
+# RAG-Chatbot (FastAPI + Semantic Kernel + Azure)
+
+## Overview
+Production-ready Retrieval-Augmented Generation (RAG) chatbot using FastAPI, SQLAlchemy, Semantic Kernel, Azure OpenAI (chat + embeddings), and Azure AI Search for retrieval. It supports JWT auth, per-user history, and a clean service-based architecture with caching.
 
 ---
 
-## ⚡ Tech Stack
-- **Backend**: FastAPI  
-- **Database**: SQLite (via SQLAlchemy ORM)  
-- **Auth**: JWT (`python-jose`) + OAuth2PasswordBearer  
-- **AI**:  
-  - Groq API (`llama-3.1-8b-instant`)  
-  - HuggingFace embeddings (`BAAI/bge-small-en-v1.5`)  
-  - Semantic Kernel  
+## Tech Stack
+- FastAPI, Pydantic v2
+- SQLAlchemy (SQLite by default)
+- Auth: OAuth2 bearer + JWT (python-jose, passlib[bcrypt])
+- Semantic Kernel (tool plugins, chat orchestration)
+- Azure OpenAI: ChatCompletion via SK, embeddings via OpenAI Python SDK (AOAI endpoint)
+- Azure AI Search: Vector + semantic hybrid search (async SDK)
 
 ---
 
-## 📂 Project Structure
+## Project Structure
 ```
 app/
- ├── main.py               # FastAPI entrypoint
- ├── database.py           # DB session + Base
- ├── models.py             # SQLAlchemy models (User, History)
- ├── schemas.py            # Pydantic schemas
- ├── auth.py               # JWT utils, register/login
- ├── rag.py                # RAG pipeline
- └── routes/
-      ├── auth_routes.py   # /register, /login
-      └── chat_routes.py   # /chat, /history
-.env                       # secrets and configs
-requirements.txt
+  api/
+    deps.py                 # auth dependency (JWT decode)
+    routes/
+      auth.py               # /auth/register, /auth/login
+      chat.py               # /chat, /chat/history, /chat/service
+  core/
+    config.py               # load .env early
+    database.py             # engine, Base, SessionLocal
+  models/
+    user.py                 # users table
+    history.py              # chat Q/A history
+    model_config.py         # chat services catalog
+  schemas/
+    auth.py                 # UserCreate, UserLogin, Token
+    chat.py                 # ChatRequest/Response, ModelConfig, AzureConfig, HistoryPair, ServiceBundle
+  services/
+    auth/security.py        # hashing, JWT helpers
+    rag/
+      chat_service.py       # AzureChatCompletion client factory
+      embedding_service.py  # Async AOAI embeddings
+      vector_retriever.py   # Azure Search (vector + semantic)
+      chat_history_service.py # cached SK ChatHistory + redaction
+      plugins.py            # SK plugin: retrieval.retrieve()
+      service_config.py     # env → AzureConfig
+      service_registry.py   # DB → ModelConfig
+      factory.py            # orchestrates RAG flow + caching
+main.py                     # FastAPI app + routers
 ```
 
 ---
 
-## 🗄 Database Models
+## Data Model
+- users: id, username, hashed_password
+- history: id, user_id, question, answer, timestamp
+- chat_services: id, service_id (unique), chat_deployment, endpoint, api_key, api_version
 
-### User
-```python
-id: int (PK)
-username: str (unique)
-hashed_password: str
-history: relationship -> History[]
+---
+
+## Auth Flow
+1) POST /auth/register → create user and return JWT
+2) POST /auth/login → return JWT
+3) Use Authorization: Bearer <token> for protected routes
+
+---
+
+## Endpoints
+- POST /auth/register → Token
+- POST /auth/login → Token
+- POST /chat?model=<service_id> → ChatResponse
+- GET  /chat/history → list[HistoryPair]
+- POST /chat/service → Create a chat service config in DB (ModelConfig)
+
+---
+
+## RAG Pipeline
+- Build/reuse a ServiceBundle per service_id:
+  - kernel: Semantic Kernel
+  - chat_service: AzureChatCompletion client (ChatCompletionClientBase)
+- Register retrieval plugin once per kernel: retrieval.retrieve(question, k)
+- Build context with ChatHistoryService (cached per user, secret redaction, trimmed turns)
+- Execute chat with FunctionChoiceBehavior.Auto and persist the Q/A pair
+
+---
+
+## Configuration
+Environment variables (.env):
+```
+# JWT
+JWT_SECRET=your_jwt_secret
+
+# Azure AI Search
+AZURE_SEARCH_ENDPOINT=https://<your-search-account>.search.windows.net
+AZURE_SEARCH_ADMIN_KEY=<admin-key>
+AZURE_SEARCH_INDEX=<index-name>
+
+# Azure OpenAI (embeddings deployment name)
+AOAI_EMBED_MODEL=<embedding-deployment-name>
 ```
 
-### History  
-(Option A: role/content, Option B: question/answer)  
-
-Current schema:
-```python
-id: int (PK)
-user_id: int (FK -> users.id)
-role: str (user/assistant)
-content: str
-timestamp: datetime
+Chat service settings are stored in DB via POST /chat/service using this payload:
+```
+{
+  "service_id": "my-aoai",
+  "chat_deployment": "gpt-4o-mini",
+  "endpoint": "https://<your-aoai>.openai.azure.com",
+  "api_key": "<aoai-key>",
+  "api_version": "2024-06-01"
+}
 ```
 
-Alternative (simpler for QA):
-```python
-question: str
-answer: str
-```
+Azure AI Search index expectations:
+- Fields: content (string), content_vector (vector)
+- Semantic configuration named "semconf" (used by the query)
 
 ---
 
-## 🔐 Authentication Flow
-1. `POST /auth/register` → Register new user  
-2. `POST /auth/login` → Returns JWT token  
-3. Use token as `Authorization: Bearer <token>`  
-4. Protected routes depend on `get_current_user()`  
-
----
-
-## 🚀 Endpoints
-
-### Auth
-- `POST /auth/register` → Create user  
-- `POST /auth/login` → Get JWT  
-
-### Chat
-- `POST /chat` → Ask question (JWT required)  
-- Runs RAG pipeline + saves history  
-
-### History
-- `GET /chat/history` → Returns user’s past Q&A  
-
----
-
-## 🧠 RAG Pipeline
-1. Embed docs with HuggingFace  
-2. Embed query + cosine similarity  
-3. Retrieve top docs  
-4. Load last 7 history messages  
-5. Send context + query to Groq LLM  
-6. Save Q&A to database  
-
----
-
-## ⚙️ Environment Variables (`.env`)
-```ini
-GROQ_API_KEY=your_groq_key
-OPENAI_API_KEY=your_groq_key
-OPENAI_API_BASE_URL=https://api.groq.com/openai/v1
-JWT_SECRET=your_base64_secret
-```
-
----
-
-## ▶️ Running the Project
-```bash
-# 1. Install deps
+## Run
+```bat
+REM 1) Install deps
 pip install -r requirements.txt
 
-# 2. Run DB migrations (or auto-create tables)
-alembic upgrade head
-
-# 3. Start FastAPI
+REM 2) Start API (tables auto-create)
 uvicorn app.main:app --reload
 ```
 
 ---
 
-## 📌 Example Usage
-
-### Register
-```http
+## Quick Start (HTTP examples)
+Register
+```
 POST /auth/register
-{
-  "username": "alice",
-  "password": "secret"
-}
+{ "username": "alice", "password": "secret" }
 ```
 
-### Login
-```http
+Login
+```
 POST /auth/login
 → { "access_token": "JWT...", "token_type": "bearer" }
 ```
 
-### Chat
-```http
-POST /chat
+Create chat service
+```
+POST /chat/service
 Authorization: Bearer JWT...
-{
-  "query": "What is RAG?"
-}
-→ { "answer": "RAG combines retrieval with generation..." }
+{ "service_id": "my-aoai", "chat_deployment": "gpt-4o-mini", "endpoint": "https://...", "api_key": "...", "api_version": "2024-06-01" }
 ```
 
-### History
-```http
+Chat
+```
+POST /chat?model=my-aoai
+Authorization: Bearer JWT...
+{ "query": "What’s our refund policy?" }
+→ { "answer": "... [#1] ..." }
+```
+
+History
+```
 GET /chat/history
 Authorization: Bearer JWT...
-→ [
-  {"question": "What is RAG?", "answer": "...", "created_at": "..."}
-]
+→ [ { "question": "...", "answer": "...", "created_at": "..." } ]
 ```
+
+---
+
+## Notes
+- ServiceBundle is typed (Kernel, ChatCompletionClientBase) and cached per service_id.
+- Chat history is cached per user with secret redaction and turn trimming.
+- Retrieval uses vector + semantic; ensure your index and "semconf" are configured.
