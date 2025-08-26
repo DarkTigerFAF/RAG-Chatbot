@@ -6,7 +6,4 @@ class ChatService(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     service_id = Column(String, unique=True, index=True, nullable=False)  
-    chat_deployment = Column(String, nullable=False)                      
-    endpoint = Column(String, nullable=False)
-    api_key = Column(String, nullable=False)
-    api_version = Column(String, default="2024-06-01")
+    chat_deployment = Column(String, nullable=False)

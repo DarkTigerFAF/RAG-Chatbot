@@ -18,16 +18,21 @@ class ChatRequest(BaseModel):
 class ModelConfig(BaseModel):
     service_id: str
     chat_deployment: str
+
+
+class EmbeddingConfig(BaseModel):
+    embed_deployment: str
+
+
+class AzureConfig(BaseModel):
     endpoint: str
     api_key: SecretStr
     api_version: str
 
-
-class AzureConfig(BaseModel):
+    # Azure Cognitive Search
     search_endpoint: str
     search_key: str
     index_name: str
-    embed_deployment: str
 
 
 class RetrievedChunk(BaseModel):
@@ -49,6 +54,4 @@ class ChatServiceCreateResponse(BaseModel):
 
 
 class ServiceBundle(BaseModel):
-
-    kernel: Kernel
     chat_service: ChatCompletionClientBase

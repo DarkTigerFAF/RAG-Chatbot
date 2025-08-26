@@ -5,14 +5,14 @@ from semantic_kernel.connectors.ai.chat_completion_client_base import (
     ChatCompletionClientBase,
 )
 
-from ...schemas.chat import ModelConfig as ModelCfgModel
+from ...schemas.chat import AzureConfig, ModelConfig
 
 
-def create_chat_service(model_cfg: ModelCfgModel) -> ChatCompletionClientBase:
+def create_chat_service(model_cfg: ModelConfig, azg_cfg: AzureConfig) -> ChatCompletionClientBase:
     return AzureChatCompletion(
         service_id=model_cfg.service_id,
         deployment_name=model_cfg.chat_deployment,
-        endpoint=model_cfg.endpoint,
-        api_key=model_cfg.api_key.get_secret_value(),
-        api_version=model_cfg.api_version,
+        endpoint=azg_cfg.endpoint,
+        api_key=azg_cfg.api_key.get_secret_value(),
+        api_version=azg_cfg.api_version,
     )

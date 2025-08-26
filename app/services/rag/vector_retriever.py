@@ -26,7 +26,7 @@ class VectorSearchRetriever:
             search_text=question,
             vector_queries=[vq],
             top=k,
-            select=["title", "content"],
+            select=["content"],
             query_type="semantic",
             semantic_configuration_name="semconf",
         )
@@ -36,6 +36,4 @@ class VectorSearchRetriever:
             content = (r.get("content") or "").strip()
             if content:
                 out.append(RetrievedChunk(content=content))
-            if len(out) >= k:
-                break
         return out

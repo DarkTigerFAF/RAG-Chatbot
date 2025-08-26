@@ -68,9 +68,6 @@ def create_chat_service(
     svc = ChatService(
         service_id=req.service_id,
         chat_deployment=req.chat_deployment,
-        endpoint=req.endpoint,
-        api_key=req.api_key.get_secret_value(),
-        api_version=req.api_version,
     )
     db.add(svc)
     try:

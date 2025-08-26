@@ -3,11 +3,11 @@ from __future__ import annotations
 from typing import List
 from openai import AsyncAzureOpenAI
 
-from ...schemas.chat import ModelConfig
+from ...schemas.chat import AzureConfig, ModelConfig
 
 
 class AzureOpenAIEmbeddingService:
-    def __init__(self, cfg: ModelConfig, embed_model: str):
+    def __init__(self, cfg: AzureConfig, embed_model: str):
         self.client = AsyncAzureOpenAI(
             api_key=cfg.api_key.get_secret_value(),
             api_version=cfg.api_version,

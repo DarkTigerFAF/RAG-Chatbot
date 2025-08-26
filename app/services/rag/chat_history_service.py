@@ -6,6 +6,8 @@ from typing import Dict, List
 from sqlalchemy.orm import Session
 from ...models import History
 from semantic_kernel.contents import ChatHistory
+from ...core.database import SessionLocal
+import asyncio
 
 
 SECRET_PAT = re.compile(
@@ -19,7 +21,7 @@ def redact(text: str) -> str:
 
 _CACHED_HISTORY: Dict[int, ChatHistory] = {}
 
-MAX_TURN = 8
+MAX_TURN = 6
 
 
 def _trim_chat_history(ch: ChatHistory, max_turn: int = MAX_TURN) -> ChatHistory:
@@ -84,11 +86,16 @@ class ChatHistoryService:
         _CACHED_HISTORY[user_id] = chat_history
         return chat_history
 
-    async def persist_pair(
-        self, db: Session, user_id: int, question: str, answer: str
-    ) -> None:
-        db.add(History(user_id=user_id, question=question, answer=answer))
-        db.commit()
+    async def persist_pair(self, user_id: int, question: str, answer: str) -> None:
+        def _write(session: Session, uid: int, q: str, a: str) -> None:
+            try:
+                session.add(History(user_id=uid, question=q, answer=a))
+                session.commit()
+            finally:
+                session.close()
+
+        session = SessionLocal()
+        await asyncio.to_thread(_write, session, user_id, question, answer)
 
         if user_id in _CACHED_HISTORY:
             ch = _CACHED_HISTORY[user_id]
