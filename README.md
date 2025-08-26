@@ -111,9 +111,6 @@ Chat service settings are stored in DB via POST /chat/service using this payload
 {
   "service_id": "my-aoai",
   "chat_deployment": "gpt-4o-mini",
-  "endpoint": "https://<your-aoai>.openai.azure.com",
-  "api_key": "<aoai-key>",
-  "api_version": "2024-06-01"
 }
 ```
 
@@ -151,7 +148,7 @@ Create chat service
 ```
 POST /chat/service
 Authorization: Bearer JWT...
-{ "service_id": "my-aoai", "chat_deployment": "gpt-4o-mini", "endpoint": "https://...", "api_key": "...", "api_version": "2024-06-01" }
+{ "service_id": "my-aoai", "chat_deployment": "gpt-4o-mini" }
 ```
 
 Chat
