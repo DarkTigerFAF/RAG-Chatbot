@@ -13,7 +13,6 @@ from semantic_kernel.connectors.ai.open_ai import AzureChatPromptExecutionSettin
 from semantic_kernel.connectors.ai import FunctionChoiceBehavior
 
 from ...schemas.chat import AzureConfig, ModelConfig, ServiceBundle, EmbeddingConfig
-from .embedding_service import AzureOpenAIEmbeddingService
 from .vector_retriever import VectorSearchRetriever
 from .chat_history_service import ChatHistoryService
 from .plugins import VectorSearchPlugin
@@ -37,20 +36,12 @@ execution_settings = AzureChatPromptExecutionSettings()
 execution_settings.function_choice_behavior = FunctionChoiceBehavior.Auto()
 execution_settings.max_tokens = 256  # cap output to reduce latency
 
-embedder = AzureOpenAIEmbeddingService(az_cfg, emb_cfg.embed_deployment)
-retriever = VectorSearchRetriever(az_cfg, embedder)
+retriever = VectorSearchRetriever(az_cfg)
 
 # Plugins
 kernel.add_plugin(plugin=VectorSearchPlugin(retriever), plugin_name="retrieval")
 
 async def rag_chat(db: Session, user_id: int, question: str, service_id: str) -> str:
-    # Exact query caching
-    cache_key_answer = f"{service_id}:{user_id}:" + question.strip()
-    hit = _CHAT_ANSWER_CACHE.get(cache_key_answer)
-    now = time.time()
-    if hit and (now - hit[0]) < _CHAT_CACHE_TTL_SEC:
-        return hit[1]
-    
     model_cfg = _CACHED_MODEL_CONFIG.get(service_id) or load_model_cfg(db, service_id)
     if not model_cfg:
         raise ValueError(f"Chat service {service_id} not found in DB")
@@ -84,9 +75,5 @@ async def rag_chat(db: Session, user_id: int, question: str, service_id: str) ->
             answer=answer_text,
         )
     )
-
-    if len(_CHAT_ANSWER_CACHE) > 512:
-        _CHAT_ANSWER_CACHE.clear()
-    _CHAT_ANSWER_CACHE[cache_key_answer] = (now, answer_text)
 
     return answer_text

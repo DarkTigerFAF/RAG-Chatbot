@@ -45,7 +45,7 @@ def get_history(
     rows = (
         db.query(History)
         .filter(History.user_id == current_user.id)
-        .order_by(History.timestamp.desc())
+        .order_by(History.timestamp.asc())
         .all()
     )
 

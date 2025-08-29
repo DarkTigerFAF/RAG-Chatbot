@@ -1,177 +1,264 @@
-# 🤖 RAG-Chatbot (FastAPI + Groq)
+# 🤖 RAG-Chatbot (FastAPI + Semantic Kernel + Azure)
 
 ## 📌 Overview
-This project is a **Retrieval-Augmented Generation (RAG) Chatbot** built with **FastAPI** and **SQLAlchemy**.  
+This project is a **Retrieval-Augmented Generation (RAG) Chatbot** built with **FastAPI**, **Semantic Kernel**, and **Azure AI services**.  
 It provides:
-- 🔐 **User authentication** with JWT (register/login)  
-- 💬 **Chat endpoint** (protected, requires token)  
-- 🕑 **Conversation history** stored per user  
-- 🧠 **RAG pipeline** using Groq LLM + HuggingFace embeddings  
-# RAG-Chatbot (FastAPI + Semantic Kernel + Azure)
-
-## Overview
-Production-ready Retrieval-Augmented Generation (RAG) chatbot using FastAPI, SQLAlchemy, Semantic Kernel, Azure OpenAI (chat + embeddings), and Azure AI Search for retrieval. It supports JWT auth, per-user history, and a clean service-based architecture with caching.
+- **User authentication** with JWT (register/login)  
+- **Chat endpoint** (protected, requires token)  
+- **Conversation history** stored per user with caching and redaction
+- **RAG pipeline** using Azure OpenAI + Azure AI Search  
+- **Dynamic chat service configuration** via database
 
 ---
 
-## Tech Stack
-- FastAPI, Pydantic v2
-- SQLAlchemy (SQLite by default)
-- Auth: OAuth2 bearer + JWT (python-jose, passlib[bcrypt])
-- Semantic Kernel (tool plugins, chat orchestration)
-- Azure OpenAI: ChatCompletion via SK, embeddings via OpenAI Python SDK (AOAI endpoint)
-- Azure AI Search: Vector + semantic hybrid search (async SDK)
+## 🛠️ Tech Stack
+- **Backend**: FastAPI, Pydantic v2, SQLAlchemy
+- **Database**: SQLite (optimized with WAL mode)
+- **Authentication**: OAuth2 Bearer + JWT (python-jose, passlib[bcrypt])
+- **AI Framework**: Semantic Kernel with function calling
+- **Azure Services**: 
+  - Azure OpenAI (chat completion)
+  - Azure AI Search (vector + semantic hybrid search)
+- **Response Format**: ORJSON for performance
+- **Middleware**: CORS, GZip compression
 
 ---
 
-## Project Structure
+## 📁 Project Structure
 ```
 app/
-  api/
-    deps.py                 # auth dependency (JWT decode)
-    routes/
-      auth.py               # /auth/register, /auth/login
-      chat.py               # /chat, /chat/history, /chat/service
-  core/
-    config.py               # load .env early
-    database.py             # engine, Base, SessionLocal
-  models/
-    user.py                 # users table
-    history.py              # chat Q/A history
-    model_config.py         # chat services catalog
-  schemas/
-    auth.py                 # UserCreate, UserLogin, Token
-    chat.py                 # ChatRequest/Response, ModelConfig, AzureConfig, HistoryPair, ServiceBundle
-  services/
-    auth/security.py        # hashing, JWT helpers
-    rag/
-      chat_service.py       # AzureChatCompletion client factory
-      embedding_service.py  # Async AOAI embeddings
-      vector_retriever.py   # Azure Search (vector + semantic)
-      chat_history_service.py # cached SK ChatHistory + redaction
-      plugins.py            # SK plugin: retrieval.retrieve()
-      service_config.py     # env → AzureConfig
-      service_registry.py   # DB → ModelConfig
-      factory.py            # orchestrates RAG flow + caching
-main.py                     # FastAPI app + routers
+├── api/
+│   ├── deps.py                     # JWT auth dependency
+│   └── routes/
+│       ├── auth.py                 # /auth/register, /auth/login
+│       └── chat.py                 # /chat, /chat/history, /chat/service
+├── core/
+│   ├── config.py                   # Environment variable loading
+│   └── database.py                 # SQLAlchemy engine, Base, session
+├── models/
+│   ├── user.py                     # User table model
+│   ├── history.py                  # Chat history table model
+│   └── model_config.py             # Chat services configuration table
+├── schemas/
+│   ├── auth.py                     # Auth request/response models
+│   └── chat.py                     # Chat request/response models
+└── services/
+    ├── auth/
+    │   └── security.py             # Password hashing, JWT creation
+    └── rag/
+        ├── chat_service.py         # Azure chat completion client
+        ├── vector_retriever.py     # Azure AI Search retrieval
+        ├── chat_history_service.py # Chat history with caching & redaction
+        ├── plugins.py              # Semantic Kernel retrieval plugin
+        ├── service_config.py       # Environment to config mapping
+        ├── service_registry.py     # Database to config loading
+        └── factory.py              # RAG orchestration with caching
 ```
 
 ---
 
-## Data Model
-- users: id, username, hashed_password
-- history: id, user_id, question, answer, timestamp
-- chat_services: id, service_id (unique), chat_deployment, endpoint, api_key, api_version
+## 🗄️ Data Model
+- **users**: id, username, hashed_password
+- **history**: id, user_id, question, answer, timestamp (with indexed user_id + timestamp)
+- **chat_services**: id, service_id (unique), chat_deployment
 
 ---
 
-## Auth Flow
-1) POST /auth/register → create user and return JWT
-2) POST /auth/login → return JWT
-3) Use Authorization: Bearer <token> for protected routes
+## 🔐 Authentication Flow
+1. **POST** `/auth/register` → Create user and return JWT
+2. **POST** `/auth/login` → Validate credentials and return JWT  
+3. Use `Authorization: Bearer <token>` header for protected routes
 
 ---
 
-## Endpoints
-- POST /auth/register → Token
-- POST /auth/login → Token
-- POST /chat?model=<service_id> → ChatResponse
-- GET  /chat/history → list[HistoryPair]
-- POST /chat/service → Create a chat service config in DB (ModelConfig)
+## 🚀 API Endpoints
+
+### Authentication
+- `POST /auth/register` → Token
+- `POST /auth/login` → Token
+
+### Chat
+- `POST /chat?model=<service_id>` → ChatResponse (requires auth)
+- `GET /chat/history` → list[HistoryPair] (requires auth)
+- `POST /chat/service` → Create chat service configuration (requires auth)
 
 ---
 
-## RAG Pipeline
-- Build/reuse a ServiceBundle per service_id:
-  - kernel: Semantic Kernel
-  - chat_service: AzureChatCompletion client (ChatCompletionClientBase)
-- Register retrieval plugin once per kernel: retrieval.retrieve(question, k)
-- Build context with ChatHistoryService (cached per user, secret redaction, trimmed turns)
-- Execute chat with FunctionChoiceBehavior.Auto and persist the Q/A pair
+## 🤖 RAG Pipeline Architecture
+
+### Core Components
+1. **ServiceBundle Caching**: Reusable chat services cached per `service_id`
+2. **Semantic Kernel Integration**: 
+   - Function calling with `FunctionChoiceBehavior.Auto`
+   - Vector search plugin: `retrieval.retrieve(question, k)`
+3. **Chat History Service**:
+   - Per-user conversation caching with `ChatHistoryTruncationReducer`
+   - Automatic secret redaction (API keys, tokens, passwords)
+   - Configurable turn limits (default: 8 turns)
+4. **Azure AI Search**: Vector + semantic hybrid search with 50 top-k retrieval
+
+### Flow
+1. Load/cache `ModelConfig` from database by `service_id`
+2. Create/reuse `ServiceBundle` (Semantic Kernel + Azure chat service)
+3. Build conversation context with history and system prompt
+4. Execute chat with automatic function calling for retrieval
+5. Persist question-answer pair asynchronously
 
 ---
 
-## Configuration
-Environment variables (.env):
-```
-# JWT
-JWT_SECRET=your_jwt_secret
+## ⚙️ Configuration
+
+### Environment Variables (.env)
+```env
+# JWT Authentication
+JWT_SECRET=your_jwt_secret_key
 
 # Azure AI Search
-AZURE_SEARCH_ENDPOINT=https://<your-search-account>.search.windows.net
-AZURE_SEARCH_ADMIN_KEY=<admin-key>
-AZURE_SEARCH_INDEX=<index-name>
+AZURE_SEARCH_ENDPOINT=https://<your-search-service>.search.windows.net
+AZURE_SEARCH_ADMIN_KEY=<your-admin-key>
+AZURE_SEARCH_INDEX=<your-index-name>
 
-# Azure OpenAI (embeddings deployment name)
+# Azure OpenAI
+AZURE_OPENAI_ENDPOINT=https://<your-resource>.openai.azure.com
+AZURE_OPENAI_API_KEY=<your-api-key>
+AZURE_OPENAI_API_VERSION=2024-06-01
 AOAI_EMBED_MODEL=<embedding-deployment-name>
+
+# CORS (optional)
+CORS_ORIGINS=*
 ```
 
-Chat service settings are stored in DB via POST /chat/service using this payload:
-```
+### Dynamic Chat Service Configuration
+Chat services are stored in the database. Create them via API:
+```json
+POST /chat/service
 {
-  "service_id": "my-aoai",
-  "chat_deployment": "gpt-4o-mini",
-  "endpoint": "https://<your-aoai>.openai.azure.com",
-  "api_key": "<aoai-key>",
-  "api_version": "2024-06-01"
+  "service_id": "gpt-4o-mini",
+  "chat_deployment": "gpt-4o-mini-deployment"
 }
 ```
 
-Azure AI Search index expectations:
-- Fields: content (string), content_vector (vector)
-- Semantic configuration named "semconf" (used by the query)
+### Azure AI Search Index Requirements
+- **Fields**: `content` (string), `content_vector` (vector)
+- **Semantic Configuration**: Named `"semconf"`
+- **Query Type**: Hybrid vector + semantic search
 
 ---
 
-## Run
-```bat
-REM 1) Install deps
-pip install -r requirements.txt
+## 🚀 Quick Start
 
-REM 2) Start API (tables auto-create)
+### 1. Installation
+```bash
+pip install -r requirements.txt
+```
+
+### 2. Environment Setup
+Create `.env` file with required Azure credentials (see Configuration section)
+
+### 3. Run Application
+```bash
 uvicorn app.main:app --reload
 ```
+Tables are auto-created on startup.
 
 ---
 
-## Quick Start (HTTP examples)
-Register
-```
+## 📋 Usage Examples
+
+### Register User
+```bash
 POST /auth/register
-{ "username": "alice", "password": "secret" }
+Content-Type: application/json
+
+{
+  "username": "alice", 
+  "password": "secure123"
+}
 ```
 
-Login
-```
+### Login
+```bash
 POST /auth/login
-→ { "access_token": "JWT...", "token_type": "bearer" }
+Content-Type: application/json
+
+{
+  "username": "alice", 
+  "password": "secure123"  
+}
+
+# Response: {"access_token": "eyJ...", "token_type": "bearer"}
 ```
 
-Create chat service
-```
+### Create Chat Service
+```bash
 POST /chat/service
-Authorization: Bearer JWT...
-{ "service_id": "my-aoai", "chat_deployment": "gpt-4o-mini", "endpoint": "https://...", "api_key": "...", "api_version": "2024-06-01" }
+Authorization: Bearer <your-jwt-token>
+Content-Type: application/json
+
+{
+  "service_id": "gpt-4o-mini",
+  "chat_deployment": "gpt-4o-mini-deployment"
+}
 ```
 
-Chat
-```
-POST /chat?model=my-aoai
-Authorization: Bearer JWT...
-{ "query": "What’s our refund policy?" }
-→ { "answer": "... [#1] ..." }
+### Chat with RAG
+```bash
+POST /chat?model=gpt-4o-mini  
+Authorization: Bearer <your-jwt-token>
+Content-Type: application/json
+
+{
+  "query": "What is your refund policy?"
+}
+
+# Response: {"answer": "Based on retrieved information [#1]..."}
 ```
 
-History
-```
+### Get Chat History
+```bash
 GET /chat/history
-Authorization: Bearer JWT...
-→ [ { "question": "...", "answer": "...", "created_at": "..." } ]
+Authorization: Bearer <your-jwt-token>
+
+# Response: [{"question": "...", "answer": "...", "created_at": "..."}]
 ```
 
 ---
 
-## Notes
-- ServiceBundle is typed (Kernel, ChatCompletionClientBase) and cached per service_id.
-- Chat history is cached per user with secret redaction and turn trimming.
-- Retrieval uses vector + semantic; ensure your index and "semconf" are configured.
+## 🔧 Key Features
+
+### Performance Optimizations
+- **SQLite WAL Mode**: Optimized for concurrent reads
+- **Service Caching**: Reusable Semantic Kernel services
+- **ORJSON Responses**: Fast JSON serialization
+- **GZip Compression**: Reduced bandwidth usage
+
+### Security Features
+- **JWT Authentication**: Stateless user sessions
+- **Secret Redaction**: Automatic sanitization of sensitive data in chat history
+- **CORS Configuration**: Configurable cross-origin policies
+- **Password Hashing**: Bcrypt with salt
+
+### RAG Enhancements
+- **Hybrid Search**: Vector similarity + semantic ranking
+- **Function Calling**: Automatic retrieval integration via Semantic Kernel
+- **Context Management**: Smart conversation history truncation
+- **Error Handling**: Graceful service unavailability responses
+
+---
+
+## 🔍 System Prompt
+The RAG assistant follows strict guidelines:
+- Answers based only on retrieved chunks `[#n]` and chat history
+- Compensates for user typos by matching intended meaning
+- Cites sources for all factual statements
+- Handles multi-part questions by answering supported parts
+- Never fabricates information outside retrieved context
+
+---
+
+## 📝 Notes
+- Chat history is cached per user with automatic secret redaction
+- ServiceBundle instances are cached per `service_id` for performance
+- Vector retrieval uses top-k=50 with semantic reranking
+- Database uses optimized SQLite settings for production workloads
+- All responses use ORJSON for improved serialization performance

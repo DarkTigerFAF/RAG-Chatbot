@@ -1,15 +1,17 @@
 from __future__ import annotations
 
-import re
+import re, asyncio
 from typing import Dict, List
-
 from sqlalchemy.orm import Session
+
 from ...models import History
-from semantic_kernel.contents import ChatHistory
 from ...core.database import SessionLocal
-import asyncio
 
+from semantic_kernel.contents.utils.author_role import AuthorRole
+from semantic_kernel.contents import ChatHistoryTruncationReducer
+from semantic_kernel.contents import ChatMessageContent
 
+# --------- Redaction ----------
 SECRET_PAT = re.compile(
     r"(?i)(api[_-]?key|secret|token|password|bearer)\s*[:=]\s*([A-Za-z0-9._\-]{10,})"
 )
@@ -19,72 +21,66 @@ def redact(text: str) -> str:
     return SECRET_PAT.sub(lambda m: f"{m.group(1)}: ***REDACTED***", text or "")
 
 
-_CACHED_HISTORY: Dict[int, ChatHistory] = {}
+# --------- Cache ----------
+MAX_TURN = 8
+_CACHED_HISTORY: Dict[int, ChatHistoryTruncationReducer] = {}
 
-MAX_TURN = 6
+SYSTEM_MESSAGE = """
+You are a RAG assistant.
 
+Policy:
+- Answer questions strictly based on retrieved chunks [#n] and recent chat history.
+- COMPENSATE for potential typos by matching intended meaning to retrieved content.
+- For multi-part questions: answer supported parts with [#n]; for unsupported parts: "Insufficient context for: <part>."
+- If chunks are partially relevant, answer only what's present and note limits.
+- Do NOT fabricate or use outside knowledge.
+- Each factual statement must cite at least one [#n].
+- When compensating typos, say: "Assuming you meant '<term>' based on context".
+- ALWAYS output retrieved chunks as they are; do not alter wording.
+- Never mention "retrieved chunks" explicitly to the user.
 
-def _trim_chat_history(ch: ChatHistory, max_turn: int = MAX_TURN) -> ChatHistory:
-    sys_msgs = [m for m in ch.messages if getattr(m, "role", "") == "system"]
-    non_sys = [m for m in ch.messages if getattr(m, "role", "") != "system"]
-
-    tail = non_sys[-max_turn:]
-
-    new_ch = ChatHistory()
-    if sys_msgs:
-        new_ch.add_system_message(sys_msgs[0].content)
-    for m in tail:
-        if m.role == "user":
-            new_ch.add_user_message(m.content)
-        elif m.role == "assistant":
-            new_ch.add_assistant_message(m.content)
-        else:
-            # fallback if other roles exist
-            new_ch.add_assistant_message(m.content)
-    return new_ch
+Output:
+- Concise answers grounded only in the retrieved context.
+- If context is limited, state so before answering the supported part.
+"""
 
 
 class ChatHistoryService:
-    async def build_context(
-        self, db: Session, user_id: int, limit: int = MAX_TURN
-    ) -> ChatHistory:
-        if user_id in _CACHED_HISTORY:
-            _CACHED_HISTORY[user_id] = _trim_chat_history(_CACHED_HISTORY[user_id])
-            return _CACHED_HISTORY[user_id]
+    async def build_context(self, db: Session, user_id: int, limit: int = MAX_TURN):
+        ch = _CACHED_HISTORY.get(user_id)
+        if ch:
+            return ch
 
-        msgs: List[History] = (
+        reducer = ChatHistoryTruncationReducer(
+            target_count=limit, threshold_count=6, auto_reduce=True
+        )
+        await reducer.add_message_async(
+            ChatMessageContent(role=AuthorRole.SYSTEM, content=SYSTEM_MESSAGE)
+        )
+
+        rows: List[History] = (
             db.query(History)
             .filter(History.user_id == user_id)
             .order_by(History.timestamp.desc())
             .limit(limit)
             .all()
         )
-        msgs.reverse()
+        rows.reverse()
 
-        system_message = """You are a RAG assistant.
+        for r in rows:
+            await reducer.add_message_async(
+                ChatMessageContent(
+                    role=AuthorRole.USER, content=redact(r.question or "")
+                )
+            )
+            await reducer.add_message_async(
+                ChatMessageContent(
+                    role=AuthorRole.ASSISTANT, content=redact(r.answer or "")
+                )
+            )
 
-                        Policy:
-                        - Answer ONLY using retrieved chunks [#n] and recent chat history.
-                        - If a question has multiple parts, treat each part separately:
-                        • If a part is supported by retrieved chunks, answer it and CITE [#n].
-                        • If a part is NOT supported, reply: "Insufficient context for: <that part>."
-                        - Every factual sentence MUST include at least one [#n] citation.
-                        - Do not use outside knowledge. Do not mention tools.
-
-                        Output:
-                        - Concise answer. No preambles. Include [#n] after each claim.
-                        """
-
-        chat_history = ChatHistory()
-        chat_history.add_system_message(system_message)
-        for m in msgs:
-            chat_history.add_user_message(redact(m.question or ""))
-            chat_history.add_assistant_message(redact(m.answer or ""))
-
-        chat_history = _trim_chat_history(chat_history)
-
-        _CACHED_HISTORY[user_id] = chat_history
-        return chat_history
+        _CACHED_HISTORY[user_id] = reducer
+        return reducer
 
     async def persist_pair(self, user_id: int, question: str, answer: str) -> None:
         def _write(session: Session, uid: int, q: str, a: str) -> None:
@@ -97,8 +93,13 @@ class ChatHistoryService:
         session = SessionLocal()
         await asyncio.to_thread(_write, session, user_id, question, answer)
 
-        if user_id in _CACHED_HISTORY:
-            ch = _CACHED_HISTORY[user_id]
-            ch.add_user_message(redact(question))
-            ch.add_assistant_message(redact(answer))
-            _CACHED_HISTORY[user_id] = _trim_chat_history(ch)
+        ch = _CACHED_HISTORY.get(user_id)
+        if ch:
+            await ch.add_message_async(
+                ChatMessageContent(role=AuthorRole.USER, content=redact(question or ""))
+            )
+            await ch.add_message_async(
+                ChatMessageContent(
+                    role=AuthorRole.ASSISTANT, content=redact(answer or "")
+                )
+            )

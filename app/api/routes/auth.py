@@ -14,7 +14,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 def register(user: UserCreate, db: Session = Depends(get_db)):
     existing = db.query(User).filter(User.username == user.username).first()
     if existing:
-        raise HTTPException(status_code=429, detail="Username already registered")
+        raise HTTPException(status_code=409, detail="Username already registered")
 
     hashed_password = auth.get_password_hash(user.password)
     db_user = User(username=user.username, hashed_password=hashed_password)
